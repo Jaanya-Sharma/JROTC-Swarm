@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, 
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from dotenv import load_dotenv
 from starlette.responses import FileResponse, JSONResponse
 
 from app.auth import auth_required, create_access_token, credentials_are_valid, require_http_auth, require_websocket_auth
@@ -19,6 +20,8 @@ from app.pipeline import VideoPipeline
 from app.rate_limit import PerIpRateLimiter
 from app.zones import ZoneEventEngine
 
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 app = FastAPI(title="Drone Swarm Tracker API")
 app.add_middleware(

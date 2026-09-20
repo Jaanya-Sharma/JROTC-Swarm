@@ -1,7 +1,9 @@
 node_modules/
 dist/
 .DS_Store
+# Runtime secrets and local backend configuration
 .env
+backend/.env
 .env.local
 .vite/
 *.log
