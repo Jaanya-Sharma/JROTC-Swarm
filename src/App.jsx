@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 const BACKEND_WS_URL = 'ws://127.0.0.1:8000/ws/tracks'
 const BACKEND_VIDEO_URL = 'http://127.0.0.1:8000/video'
+const BACKEND_API_URL = 'http://127.0.0.1:8000'
 const WS_BUFFER_SECONDS = 60
 
 function useLocalStorage(key, initialValue){
@@ -116,6 +117,9 @@ export default function App(){
   const [showVectors, setShowVectors] = useState(true)
   const [rings, setRings] = useState(5)
   const [syncedTracks, setSyncedTracks] = useState(null)
+  const [drawZoneMode, setDrawZoneMode] = useState(false)
+  const [zoneDrag, setZoneDrag] = useState(null)
+  const [zones, setZones] = useState([])
 
   const timerRef = useRef(null)
   const videoRef = useRef(null)
@@ -123,6 +127,7 @@ export default function App(){
   const wsFrameBufferRef = useRef([])
   const frameSizeRef = useRef({ width: 0, height: 0 })
   const syncedFrameRef = useRef(null)
+  const radarSvgRef = useRef(null)
 
   useEffect(()=>{
     clearInterval(timerRef.current)
@@ -263,6 +268,105 @@ export default function App(){
     )
   }
 
+  const radarPoint = (event) => {
+    const svg = radarSvgRef.current
+    const matrix = svg?.getScreenCTM()
+    if (!svg || !matrix) return null
+    const point = svg.createSVGPoint()
+    point.x = event.clientX
+    point.y = event.clientY
+    const { x, y } = point.matrixTransform(matrix.inverse())
+    return { x: clamp(x, 0, W), y: clamp(y, 0, H) }
+  }
+
+  const startZoneDrag = (event) => {
+    if (!drawZoneMode) return
+    const point = radarPoint(event)
+    if (point) setZoneDrag({ start: point, current: point })
+  }
+
+  const updateZoneDrag = (event) => {
+    if (!zoneDrag) return
+    const point = radarPoint(event)
+    if (point) setZoneDrag(drag => ({ ...drag, current: point }))
+  }
+
+  const finishZoneDrag = async (event) => {
+    if (!zoneDrag) return
+    const point = radarPoint(event) || zoneDrag.current
+    const x1 = Math.min(zoneDrag.start.x, point.x) / W
+    const y1 = Math.min(zoneDrag.start.y, point.y) / H
+    const x2 = Math.max(zoneDrag.start.x, point.x) / W
+    const y2 = Math.max(zoneDrag.start.y, point.y) / H
+    setZoneDrag(null)
+
+    if (x2 - x1 < 0.01 || y2 - y1 < 0.01) return
+    const name = window.prompt('Zone name')?.trim()
+    if (!name) return
+
+    try {
+      const response = await fetch(`${BACKEND_API_URL}/zones`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, rect: { x1, y1, x2, y2 } }),
+      })
+      if (!response.ok) throw new Error('Zone creation failed')
+      const createdZone = await response.json()
+      setZones(currentZones => [...currentZones, createdZone])
+    } catch {
+      window.alert('Could not create zone.')
+    }
+  }
+
+  const visibleZoneRect = (zone) => ({
+    x: zone.rect.x1 * W,
+    y: zone.rect.y1 * H,
+    width: (zone.rect.x2 - zone.rect.x1) * W,
+    height: (zone.rect.y2 - zone.rect.y1) * H,
+  })
+
+  const exportAar = async () => {
+    const endMs = Date.now()
+    const startMs = endMs - 5 * 60 * 1000
+    const query = new URLSearchParams({
+      start_ms: String(startMs),
+      end_ms: String(endMs),
+      limit: '20000',
+    })
+
+    try {
+      const [replayResponse, eventsResponse] = await Promise.all([
+        fetch(`${BACKEND_API_URL}/replay?${query}`),
+        fetch(`${BACKEND_API_URL}/events?${query}`),
+      ])
+      if (!replayResponse.ok || !eventsResponse.ok) throw new Error('AAR fetch failed')
+
+      const [replay, events] = await Promise.all([
+        replayResponse.json(),
+        eventsResponse.json(),
+      ])
+      const aar = {
+        generated_at: new Date(endMs).toISOString(),
+        start_ms: startMs,
+        end_ms: endMs,
+        track_samples: replay.samples,
+        events: events.events,
+      }
+      const downloadUrl = URL.createObjectURL(
+        new Blob([JSON.stringify(aar, null, 2)], { type: 'application/json' })
+      )
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = `aar-${endMs}.json`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(downloadUrl)
+    } catch {
+      window.alert('Could not export the AAR.')
+    }
+  }
+
   return (
     <div className="shell">
       <div className="topbar">
@@ -300,7 +404,7 @@ export default function App(){
           <button className="btn primary" onClick={()=>setPlaying(p=>!p)}>{playing ? 'Pause' : 'Play'}</button>
           <button className="btn" onClick={rewind}>⟲ Rewind</button>
           <button className="btn" onClick={fastFwd}>Fast ⟳</button>
-          <button className="btn" onClick={()=>alert('Prototype export: wire this to PDF/JSON AAR later.')}>Export AAR</button>
+          <button className="btn" onClick={exportAar}>Export AAR</button>
         </div>
       </div>
 
@@ -366,7 +470,14 @@ export default function App(){
 
           <div className="panelBody" style={{ overflow:'hidden' }}>
             <div className="radarWrap">
-              <svg className="radarSvg" viewBox={`0 0 ${W} ${H}`}>
+              <svg
+                ref={radarSvgRef}
+                className={`radarSvg${drawZoneMode ? ' drawingZone' : ''}`}
+                viewBox={`0 0 ${W} ${H}`}
+                onMouseDown={startZoneDrag}
+                onMouseMove={updateZoneDrag}
+                onMouseUp={finishZoneDrag}
+              >
                 {/* Base circle + rings */}
                 <circle cx={cx} cy={cy} r={radius} stroke="rgba(255,255,255,.22)" fill="none" />
                 {ringEls.map((el, idx)=>{
@@ -380,6 +491,28 @@ export default function App(){
                 {/* Sweep wedge */}
                 <path d={`M ${cx} ${cy} L ${cx} ${cy-radius} A ${radius} ${radius} 0 0 1 ${cx + radius*0.35} ${cy - radius*0.94} Z`}
                       fill="rgba(34,197,94,.10)" />
+
+                {zones.map(zone => {
+                  const rect = visibleZoneRect(zone)
+                  return (
+                    <g key={zone.id} pointerEvents="none">
+                      <rect {...rect} fill="rgba(56,189,248,.12)" stroke="rgba(56,189,248,.9)" strokeWidth="2" />
+                      <text x={rect.x + 6} y={rect.y + 16} fill="rgba(186,230,253,.95)" fontSize="12">{zone.name}</text>
+                    </g>
+                  )
+                })}
+                {zoneDrag ? (
+                  <rect
+                    x={Math.min(zoneDrag.start.x, zoneDrag.current.x)}
+                    y={Math.min(zoneDrag.start.y, zoneDrag.current.y)}
+                    width={Math.abs(zoneDrag.current.x - zoneDrag.start.x)}
+                    height={Math.abs(zoneDrag.current.y - zoneDrag.start.y)}
+                    fill="rgba(56,189,248,.12)"
+                    stroke="rgba(56,189,248,.95)"
+                    strokeDasharray="6 4"
+                    pointerEvents="none"
+                  />
+                ) : null}
 
                 {/* Tracks */}
                 {tracks.map(tr=>{
@@ -423,6 +556,9 @@ export default function App(){
               <div style={{ display:'flex', gap:10, marginTop:10, width:'100%', alignItems:'center', justifyContent:'space-between' }}>
                 <div className="small">Display</div>
                 <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                  <button className={`btn${drawZoneMode ? ' primary' : ''}`} onClick={()=>setDrawZoneMode(enabled=>!enabled)}>
+                    {drawZoneMode ? 'Drawing zone…' : 'Draw zone'}
+                  </button>
                   <button className="btn" onClick={()=>setRings(r=>clamp(r-1,3,7))}>- Ring</button>
                   <button className="btn" onClick={()=>setRings(r=>clamp(r+1,3,7))}>+ Ring</button>
                 </div>
