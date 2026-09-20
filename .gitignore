@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.DS_Store
+.env
+.env.local
+.vite/
+*.log
+
+.venv/
+__pycache__/
+*.pyc
+
+# Large/binary assets — keep these out of git regardless of where they live
+*.mp4
+*.db
+*.db-wal
+*.db-shm
+*.pt
