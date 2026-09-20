@@ -356,8 +356,8 @@ export default function App(){
       const pdf = new jsPDF({ unit: 'pt', format: 'letter' })
       const pageWidth = pdf.internal.pageSize.getWidth()
       const margin = 42
-      const timeline = { x: margin, y: 132, width: pageWidth - margin * 2, height: 110 }
-      const zoneMap = { x: margin, y: 302, width: 250, height: 180 }
+      const timeline = { x: margin, y: 158, width: pageWidth - margin * 2, height: 110 }
+      const zoneMap = { x: margin, y: 330, width: 250, height: 180 }
 
       pdf.setFillColor(10, 18, 30)
       pdf.rect(0, 0, pageWidth, 76, 'F')
@@ -371,6 +371,11 @@ export default function App(){
       pdf.setFontSize(11)
       pdf.text(`Window: ${new Date(startMs).toLocaleTimeString()} to ${new Date(endMs).toLocaleTimeString()}`, margin, 100)
       pdf.text(`Track samples: ${replay.samples?.length || 0}   Zone events: ${eventList.length}   Zones: ${zones.length}`, margin, 117)
+      if (!(replay.samples?.length) && !eventList.length){
+        pdf.setTextColor(180, 83, 9)
+        pdf.setFontSize(9)
+        pdf.text('No stored samples or events were returned for this five-minute window.', margin, 136)
+      }
 
       pdf.setFontSize(12)
       pdf.text('Event timeline', timeline.x, timeline.y - 10)

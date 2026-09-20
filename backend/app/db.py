@@ -33,6 +33,27 @@ def open_database(path: Path = DEFAULT_DATABASE_PATH) -> sqlite3.Connection:
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_track_samples_ts_ms ON track_samples (ts_ms)"
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS zones (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            rect_json TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS events (
+            ts_ms INTEGER NOT NULL,
+            type TEXT NOT NULL,
+            track_id INTEGER NOT NULL,
+            zone_id INTEGER NOT NULL,
+            zone_name TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_events_ts_ms ON events (ts_ms)")
     connection.commit()
     return connection
 
