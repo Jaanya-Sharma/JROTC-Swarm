@@ -46,7 +46,7 @@ starts. Configure these values:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AUTH_REQUIRED` | `false` | Enables JWT protection for `/video`, `/replay`, `/zones`, `/events`, and `/ws/tracks`. |
+| `AUTH_REQUIRED` | `true` | Required: enables JWT protection for `/video`, `/replay`, `/zones`, `/events`, and `/ws/tracks`. |
 | `JWT_SECRET` | placeholder | Long, random JWT signing secret when authentication is enabled. |
 | `API_USERNAME` / `API_PASSWORD` | placeholders | Credentials accepted by `POST /auth/token`. |
 | `JWT_EXPIRES_MINUTES` | `60` | JWT lifetime. |
@@ -54,13 +54,10 @@ starts. Configure these values:
 | `RATE_LIMIT_REQUESTS` | `120` | Maximum HTTP/WebSocket connection attempts per IP per window. |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Rate-limit window length. |
 
-Do not commit `.env`, and replace all placeholder credentials before enabling
-authentication.
-
-> **Current UI authentication note:** `App.jsx` does not yet acquire or attach
-> a JWT. To run the browser UI end-to-end, leave `AUTH_REQUIRED=false`. With it
-> set to `true`, protected API calls and the video/WebSocket require a bearer
-> token; use the API manually or add a login/token flow to the frontend first.
+Do not commit `.env`. Authentication is mandatory: replace the placeholder
+secret and credentials before starting the application. The browser opens an
+operator sign-in screen and keeps its JWT only in `sessionStorage`; it sends the
+token on protected API requests and when connecting to `/ws/tracks`.
 
 ## Run the application
 
@@ -96,24 +93,20 @@ npm run dev
 ```
 
 Open the Vite URL shown in the terminal, normally `http://localhost:5173`.
-The app connects to the backend at `127.0.0.1:8000`. If the backend is stopped,
-the radar intentionally falls back to the 72 simulated tracks.
+The app connects to the backend at `127.0.0.1:8000`. Sign in with the
+`API_USERNAME` and `API_PASSWORD` in `backend/.env`. The UI then obtains a JWT,
+loads the protected video, and connects to the protected WebSocket. Keep tokens
+out of screenshots, shell history, and source files.
 
-### Optional: use JWT-protected API calls
+If the backend becomes unavailable after sign-in, the UI retains the valid
+session, clears stale live tracks, shows an offline notice, and returns to the
+72-track simulator. It retries the WebSocket every two seconds and resumes live
+data when the backend returns. A brand-new session cannot sign in while the
+authentication service is offline.
 
-After setting `AUTH_REQUIRED=true` and choosing real credentials in `.env`, get
-a token from PowerShell:
-
-```powershell
-$body = @{ username = "operator"; password = "your-password" } | ConvertTo-Json
-$token = (Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/auth/token -ContentType "application/json" -Body $body).access_token
-$uri = 'http://127.0.0.1:8000/replay?start_ms=0&end_ms=1&limit=1'
-Invoke-RestMethod -Uri $uri -Headers @{ Authorization = "Bearer $token" }
-```
-
-For a WebSocket client, supply the same token as `?access_token=<token>` or as
-an `Authorization: Bearer <token>` header. Keep tokens out of screenshots,
-shell history, and source files.
+For a non-browser API client, request a token from `POST /auth/token` and send
+it as `Authorization: Bearer <token>`. A WebSocket client may instead use
+`?access_token=<token>`.
 
 ## API and stream summary
 

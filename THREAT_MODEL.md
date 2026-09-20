@@ -22,11 +22,10 @@ database, the integrity of the tactical display, and service availability.
 
 ## Deployment assumptions and residual risk
 
-Authentication is deliberately disabled by default for the local demo
-(`AUTH_REQUIRED=false`). Before binding the service beyond a trusted local
-machine, enable authentication, set a long random `JWT_SECRET`, use HTTPS, and
-place it behind a trusted reverse proxy. Do not trust forwarded-IP headers until
-that proxy is configured.
+Authentication is required by the supplied configuration (`AUTH_REQUIRED=true`).
+Before binding the service beyond a trusted local machine, set a long random
+`JWT_SECRET`, use HTTPS, and place it behind a trusted reverse proxy. Do not
+trust forwarded-IP headers until that proxy is configured.
 
 The rate limiter, zone list, and event list are process-local, so they do not
 coordinate across multiple workers or survive restarts. This application is not

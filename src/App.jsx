@@ -108,6 +108,14 @@ function nowTS(){
 }
 
 export default function App(){
+  const [authToken, setAuthToken] = useState(()=> window.sessionStorage.getItem('radar-access-token') || '')
+  const [authUsername, setAuthUsername] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authError, setAuthError] = useState('')
+  const [authSubmitting, setAuthSubmitting] = useState(false)
+  const [videoUrl, setVideoUrl] = useState(null)
+  const [videoRequestVersion, setVideoRequestVersion] = useState(0)
+  const [backendOffline, setBackendOffline] = useState(false)
   const [playing, setPlaying] = useState(true)
   const [speed, setSpeed] = useState(1)
   const [tick, setTick] = useState(0)
@@ -150,9 +158,62 @@ export default function App(){
   }, [playing, speed])
 
   useEffect(()=>{
+    let objectUrl
+    let cancelled = false
+    setVideoLoaded(false)
+    if (!authToken){
+      setVideoUrl(null)
+      return undefined
+    }
+
+    fetch(BACKEND_VIDEO_URL, { headers: { Authorization: `Bearer ${authToken}` } })
+      .then(response => {
+        if (response.status === 401 || response.status === 403) {
+          const error = new Error('Video request was rejected')
+          error.authFailure = true
+          throw error
+        }
+        if (!response.ok) throw new Error('Video request failed')
+        return response.blob()
+      })
+      .then(blob => {
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(blob)
+        setVideoUrl(objectUrl)
+      })
+      .catch(error => {
+        if (!cancelled) {
+          if (error.authFailure) {
+            window.sessionStorage.removeItem('radar-access-token')
+            setAuthError('Your session has expired. Sign in again.')
+            setAuthToken('')
+          } else {
+            setBackendOffline(true)
+          }
+        }
+      })
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [authToken, videoRequestVersion])
+
+  useEffect(()=>{
     let socket
-    const connectionTimer = window.setTimeout(()=>{
-      socket = new WebSocket(BACKEND_WS_URL)
+    let retryTimer
+    let cancelled = false
+    if (!authToken) return undefined
+
+    const connect = () => {
+      const wsUrl = new URL(BACKEND_WS_URL)
+      wsUrl.searchParams.set('access_token', authToken)
+      socket = new WebSocket(wsUrl)
+
+      socket.onopen = () => {
+        setBackendOffline(false)
+        setVideoRequestVersion(version => version + 1)
+      }
 
       socket.onmessage = (event) => {
         const message = JSON.parse(event.data)
@@ -170,13 +231,32 @@ export default function App(){
         }
       }
 
-    }, 0)
+      socket.onclose = (event) => {
+        if (cancelled) return
+        if (event.code === 1008) {
+          window.sessionStorage.removeItem('radar-access-token')
+          setAuthError('Your session is invalid or has expired. Sign in again.')
+          setAuthToken('')
+          return
+        }
+        setBackendOffline(true)
+        setSyncedTracks(null)
+        syncedFrameRef.current = null
+        wsFrameBufferRef.current = []
+        if (!cancelled) retryTimer = window.setTimeout(connect, 2000)
+      }
+
+      socket.onerror = () => socket.close()
+    }
+
+    retryTimer = window.setTimeout(connect, 0)
 
     return () => {
-      window.clearTimeout(connectionTimer)
+      cancelled = true
+      window.clearTimeout(retryTimer)
       socket?.close()
     }
-  }, [])
+  }, [authToken])
 
   useEffect(()=>{
     let animationFrameId
@@ -337,7 +417,7 @@ export default function App(){
     try {
       const response = await fetch(`${BACKEND_API_URL}/zones`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ name, rect: { x1, y1, x2, y2 } }),
       })
       if (!response.ok) throw new Error('Zone creation failed')
@@ -366,8 +446,8 @@ export default function App(){
 
     try {
       const [replayResponse, eventsResponse] = await Promise.all([
-        fetch(`${BACKEND_API_URL}/replay?${query}`),
-        fetch(`${BACKEND_API_URL}/events?${query}`),
+        fetch(`${BACKEND_API_URL}/replay?${query}`, { headers: { Authorization: `Bearer ${authToken}` } }),
+        fetch(`${BACKEND_API_URL}/events?${query}`, { headers: { Authorization: `Bearer ${authToken}` } }),
       ])
       if (!replayResponse.ok || !eventsResponse.ok) throw new Error('AAR fetch failed')
 
@@ -468,6 +548,61 @@ export default function App(){
     }
   }
 
+  const signIn = async (event) => {
+    event.preventDefault()
+    setAuthError('')
+    setAuthSubmitting(true)
+    try {
+      const response = await fetch(`${BACKEND_API_URL}/auth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: authUsername, password: authPassword }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok || typeof payload.access_token !== 'string') {
+        throw new Error(payload.detail || 'Sign-in failed')
+      }
+      window.sessionStorage.setItem('radar-access-token', payload.access_token)
+      setAuthPassword('')
+      setAuthToken(payload.access_token)
+    } catch (error) {
+      setAuthError(typeof error.message === 'string' ? error.message : 'Sign-in failed')
+    } finally {
+      setAuthSubmitting(false)
+    }
+  }
+
+  const signOut = () => {
+    window.sessionStorage.removeItem('radar-access-token')
+    setAuthToken('')
+    setSyncedTracks(null)
+    setZoneEvents([])
+    setBackendOffline(false)
+    wsFrameBufferRef.current = []
+  }
+
+  if (!authToken) return (
+    <main className="authShell">
+      <form className="authCard" onSubmit={signIn}>
+        <div className="authEyebrow">JROTC SWARM TACTICAL CONSOLE</div>
+        <h1>Operator sign in</h1>
+        <p>Enter the credentials configured in <code>backend/.env</code> to access the live tactical picture.</p>
+        <label>
+          Username
+          <input value={authUsername} onChange={event => setAuthUsername(event.target.value)} autoComplete="username" maxLength="128" required />
+        </label>
+        <label>
+          Password
+          <input type="password" value={authPassword} onChange={event => setAuthPassword(event.target.value)} autoComplete="current-password" maxLength="1024" required />
+        </label>
+        {authError && <div className="authError" role="alert">{authError}</div>}
+        <button className="btn primary authSubmit" disabled={authSubmitting}>
+          {authSubmitting ? 'Signing in…' : 'Sign in'}
+        </button>
+      </form>
+    </main>
+  )
+
   return (
     <div className="shell">
       <div className="topbar">
@@ -506,6 +641,7 @@ export default function App(){
           <button className="btn" onClick={rewind}>⟲ Rewind</button>
           <button className="btn" onClick={fastFwd}>Fast ⟳</button>
           <button className="btn" onClick={exportAar}>Export AAR</button>
+          <button className="btn" onClick={signOut}>Sign out</button>
         </div>
       </div>
 
@@ -525,8 +661,9 @@ export default function App(){
 
           <div className="panelBody">
             <div className="videoBox">
-              <video ref={videoRef} className="videoFeed" src={BACKEND_VIDEO_URL} autoPlay muted playsInline onLoadedMetadata={()=>{ const video = videoRef.current; video.playbackRate = speed; setVideoDuration(video.duration || 600); setVideoLoaded(true) }} onTimeUpdate={(event)=>setTick(event.currentTarget.currentTime)} />
+              <video ref={videoRef} className="videoFeed" src={videoUrl || undefined} autoPlay muted playsInline onLoadedMetadata={()=>{ const video = videoRef.current; video.playbackRate = speed; setVideoDuration(video.duration || 600); setVideoLoaded(true) }} onTimeUpdate={(event)=>setTick(event.currentTarget.currentTime)} />
               <canvas ref={overlayCanvasRef} className="videoOverlay" aria-label="Detection overlay" />
+              {backendOffline && <div className="offlineNotice">Backend offline — simulator fallback active</div>}
               <div className="hud">
                 <div className="tag tagTL"><b>HUD</b> • IDs • Conf • Flags</div>
                 <div className="tag tagTR"><b>INTEGRITY</b> • no false precision</div>
