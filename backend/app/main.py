@@ -1,16 +1,20 @@
 import asyncio
+import os
 import sqlite3
 import time
 from itertools import count
 from math import cos, pi, sin
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator, model_validator
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, JSONResponse
 
-from app.db import open_database
+from app.auth import auth_required, create_access_token, credentials_are_valid, require_http_auth, require_websocket_auth
+from app.db import TrackSampleWriter, open_database
+from app.pipeline import VideoPipeline
+from app.rate_limit import PerIpRateLimiter
 from app.zones import ZoneEventEngine
 
 
@@ -22,6 +26,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def rate_limit(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    if not RATE_LIMITER.allow(client_ip):
+        return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
+    return await call_next(request)
 VIDEO_PATH = Path(__file__).resolve().parents[1] / "data" / "perdix_swarm_demo.mp4"
 MAX_REPLAY_WINDOW_MS = 10 * 60 * 1000
 MAX_REPLAY_LIMIT = 20_000
@@ -31,6 +43,8 @@ EVENTS: list[dict] = []
 RADAR_WIDTH = 680
 RADAR_HEIGHT = 520
 RADAR_RADIUS = min(RADAR_WIDTH, RADAR_HEIGHT) / 2 - 28
+RATE_LIMITER = PerIpRateLimiter(int(os.getenv("RATE_LIMIT_REQUESTS", "120")), float(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")))
+AUTH_RATE_LIMITER = PerIpRateLimiter(5, 60)
 
 
 class ZoneRect(BaseModel):
@@ -59,6 +73,11 @@ class ZoneCreate(BaseModel):
         return cleaned
 
 
+class TokenRequest(BaseModel):
+    username: str
+    password: str
+
+
 def engine_zones() -> list[dict]:
     """Convert API rectangle objects to the tuple form used by the engine."""
     return [
@@ -84,13 +103,25 @@ def track_radar_position(track: dict) -> tuple[float, float]:
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
+async def health() -> dict[str, bool]:
     """Return a simple liveness response."""
-    return {"status": "ok"}
+    return {"ok": True}
+
+
+@app.post("/auth/token")
+async def token(credentials: TokenRequest, request: Request) -> dict[str, str]:
+    client_ip = request.client.host if request.client else "unknown"
+    if not AUTH_RATE_LIMITER.allow(client_ip):
+        raise HTTPException(status_code=429, detail="Too many authentication attempts")
+    if not auth_required():
+        raise HTTPException(status_code=400, detail="Authentication is not enabled")
+    if not credentials_are_valid(credentials.username, credentials.password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return {"access_token": create_access_token(credentials.username), "token_type": "bearer"}
 
 
 @app.get("/video")
-async def video() -> FileResponse:
+async def video(_: str | None = Depends(require_http_auth)) -> FileResponse:
     """Serve the demo video; FileResponse handles HTTP byte-range requests."""
     if not VIDEO_PATH.is_file():
         raise HTTPException(status_code=404, detail="Demo video not found")
@@ -102,6 +133,7 @@ async def replay(
     start_ms: int = Query(ge=0),
     end_ms: int = Query(ge=0),
     limit: int = Query(ge=1, le=MAX_REPLAY_LIMIT),
+    _: str | None = Depends(require_http_auth),
 ) -> dict[str, list[dict]]:
     """Return persisted samples for a bounded timestamp range."""
     if start_ms >= end_ms:
@@ -130,7 +162,7 @@ async def replay(
 
 
 @app.post("/zones")
-async def create_zone(zone: ZoneCreate) -> dict:
+async def create_zone(zone: ZoneCreate, _: str | None = Depends(require_http_auth)) -> dict:
     """Create an in-memory zone with normalized rectangle coordinates."""
     created_zone = {"id": next(ZONE_IDS), "name": zone.name, "rect": zone.rect.model_dump()}
     ZONES.append(created_zone)
@@ -142,6 +174,7 @@ async def list_events(
     start_ms: int = Query(ge=0),
     end_ms: int = Query(ge=0),
     limit: int = Query(ge=1, le=MAX_REPLAY_LIMIT),
+    _: str | None = Depends(require_http_auth),
 ) -> dict[str, list[dict]]:
     """Return in-memory zone events for a bounded timestamp range."""
     if start_ms >= end_ms:
@@ -157,30 +190,36 @@ async def list_events(
 
 @app.websocket("/ws/tracks")
 async def tracks_websocket(websocket: WebSocket) -> None:
-    """Stream a synthetic track snapshot at 10 Hz."""
+    """Stream tracked video frames, bboxes, and zone events."""
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    if not RATE_LIMITER.allow(client_ip):
+        await websocket.close(code=1013)
+        return
+    if auth_required() and await require_websocket_auth(websocket) is None:
+        return
     await websocket.accept()
-    bearing = 0.0
+    pipeline = VideoPipeline(VIDEO_PATH)
+    connection = open_database()
+    writer = TrackSampleWriter(connection)
     zone_engine = ZoneEventEngine([])
+    await websocket.send_json({"type": "hello", "frame_w": pipeline.frame_w, "frame_h": pipeline.frame_h, "fps": pipeline.fps})
 
     try:
         while True:
-            track = {
-                "id": 1,
-                "callsign": "UAV-01",
-                "type": "multirotor",
-                "bearing": bearing,
-                "range_u": 0.66,
-                "heading": (bearing + 45) % 360,
-                "rel_speed_u": 11.0,
-                "alt_band": "MED",
-                "confidence": 0.85,
-                "flags": [],
-            }
-            await websocket.send_json({"type": "tracks_snapshot", "tracks": [track]})
+            message = pipeline.next_frame()
+            if message is None:
+                break
+            await websocket.send_json(message)
+            timestamp_ms = int(time.time() * 1000)
+            for track in message["tracks"]:
+                writer.add_sample({"ts_ms": timestamp_ms, "track_id": track["id"], "bearing": track["bearing"], "range_u": track["range_u"], "heading": track["heading"], "rel_speed_u": track["rel_speed_u"], "altitude_m": track["altitude_m"], "confidence": track["confidence"]})
             zone_engine.zones = engine_zones()
-            x, y = track_radar_position(track)
+            zone_updates = []
+            for track in message["tracks"]:
+                x, y = track_radar_position(track)
+                zone_updates.append({"id": track["id"], "x": x, "y": y, "ts_ms": timestamp_ms})
             events = zone_engine.process(
-                [{"id": track["id"], "x": x, "y": y, "ts_ms": int(time.time() * 1000)}]
+                zone_updates
             )
             if events:
                 zone_names = {zone["id"]: zone["name"] for zone in ZONES}
@@ -190,7 +229,10 @@ async def tracks_websocket(websocket: WebSocket) -> None:
                 if len(EVENTS) > 10_000:
                     del EVENTS[:-10_000]
                 await websocket.send_json({"type": "events", "events": events})
-            bearing = (bearing + 3) % 360
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(1 / pipeline.fps)
     except WebSocketDisconnect:
         pass
+    finally:
+        writer.flush()
+        connection.close()
+        pipeline.close()
