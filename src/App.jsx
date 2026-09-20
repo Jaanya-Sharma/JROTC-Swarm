@@ -150,25 +150,32 @@ export default function App(){
   }, [playing, speed])
 
   useEffect(()=>{
-    const socket = new WebSocket(BACKEND_WS_URL)
+    let socket
+    const connectionTimer = window.setTimeout(()=>{
+      socket = new WebSocket(BACKEND_WS_URL)
 
-    socket.onmessage = (event) => {
-      const message = JSON.parse(event.data)
-      if (Number.isFinite(message.frame_w) && Number.isFinite(message.frame_h)){
-        frameSizeRef.current = { width: message.frame_w, height: message.frame_h }
+      socket.onmessage = (event) => {
+        const message = JSON.parse(event.data)
+        if (Number.isFinite(message.frame_w) && Number.isFinite(message.frame_h)){
+          frameSizeRef.current = { width: message.frame_w, height: message.frame_h }
+        }
+        if (Number.isFinite(message.media_t_sec) && (Array.isArray(message.bboxes) || Array.isArray(message.tracks))){
+          const frames = wsFrameBufferRef.current
+          frames.push(message)
+          const cutoff = message.media_t_sec - WS_BUFFER_SECONDS
+          while (frames.length && frames[0].media_t_sec < cutoff) frames.shift()
+        }
+        if (message.type === 'events' && Array.isArray(message.events)){
+          setZoneEvents(currentEvents => [...message.events, ...currentEvents].slice(0, 100))
+        }
       }
-      if (Number.isFinite(message.media_t_sec) && (Array.isArray(message.bboxes) || Array.isArray(message.tracks))){
-        const frames = wsFrameBufferRef.current
-        frames.push(message)
-        const cutoff = message.media_t_sec - WS_BUFFER_SECONDS
-        while (frames.length && frames[0].media_t_sec < cutoff) frames.shift()
-      }
-      if (message.type === 'events' && Array.isArray(message.events)){
-        setZoneEvents(currentEvents => [...message.events, ...currentEvents].slice(0, 100))
-      }
+
+    }, 0)
+
+    return () => {
+      window.clearTimeout(connectionTimer)
+      socket?.close()
     }
-
-    return () => socket.close()
   }, [])
 
   useEffect(()=>{
