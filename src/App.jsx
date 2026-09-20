@@ -627,7 +627,7 @@ export default function App(){
         </div>
 
         <div className="pills">
-          <div className="pill"><span className="dot" /> AI <b>LIVE</b></div>
+          <div className="pill"><span className={`dot${backendOffline ? ' offlineDot' : ''}`} /> AI <b>{backendOffline ? 'OFFLINE' : 'LIVE'}</b></div>
           <div className="pill">Tracks <b>{tracks.length}</b></div>
           <div className="pill">Flagged <b>{alertCount}</b></div>
           <div className="pill">Mode <b>REL</b></div>
@@ -663,11 +663,12 @@ export default function App(){
             <div className="videoBox">
               <video ref={videoRef} className="videoFeed" src={videoUrl || undefined} autoPlay muted playsInline onLoadedMetadata={()=>{ const video = videoRef.current; video.playbackRate = speed; setVideoDuration(video.duration || 600); setVideoLoaded(true) }} onTimeUpdate={(event)=>setTick(event.currentTarget.currentTime)} />
               <canvas ref={overlayCanvasRef} className="videoOverlay" aria-label="Detection overlay" />
-              {backendOffline && <div className="offlineNotice">Backend offline — simulator fallback active</div>}
               <div className="hud">
                 <div className="tag tagTL"><b>HUD</b> • IDs • Conf • Flags</div>
                 <div className="tag tagTR"><b>INTEGRITY</b> • no false precision</div>
-                <div className="tag tagBL"><b>NOTE</b> • range units + altitude bands are inferred</div>
+                <div className={`tag tagBL${backendOffline ? ' offlineTag' : ''}`}>
+                  {backendOffline ? <><b>OFFLINE</b> • simulator fallback active</> : <><b>NOTE</b> • range units + altitude bands are inferred</>}
+                </div>
               </div>
             </div>
 

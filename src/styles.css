@@ -112,6 +112,7 @@ a{ color:inherit; text-decoration:none; }
 }
 .pill b{ font-family:var(--mono); font-weight:600; }
 .dot{ width:8px;height:8px;border-radius:999px;background:var(--accent); box-shadow:0 0 18px rgba(34,197,94,.65); }
+.dot.offlineDot{ background:var(--bad); box-shadow:0 0 18px rgba(239,68,68,.65); }
 
 .actions{ margin-left:auto; display:flex; gap:8px; align-items:center; }
 .btn{
@@ -215,19 +216,6 @@ a{ color:inherit; text-decoration:none; }
   height:100%;
   pointer-events:none;
 }
-.offlineNotice{
-  position:absolute;
-  left:12px;
-  right:12px;
-  bottom:12px;
-  padding:8px 10px;
-  border:1px solid rgba(245,158,11,.45);
-  border-radius:10px;
-  background:rgba(69,26,3,.82);
-  color:#fde68a;
-  font-size:11px;
-  text-align:center;
-}
 .radarSvg.drawingZone{ cursor: crosshair; }
 .gridNoise{
   position:absolute; inset:0;
@@ -255,6 +243,7 @@ a{ color:inherit; text-decoration:none; }
 .hud .tagTL{ left:12px; top:12px; }
 .hud .tagTR{ right:12px; top:12px; border-color: rgba(56,189,248,.25); }
 .hud .tagBL{ left:12px; bottom:12px; border-color: rgba(255,255,255,.12); }
+.hud .offlineTag{ border-color:rgba(245,158,11,.5); background:rgba(69,26,3,.82); color:#fde68a; }
 
 /* Controls */
 .controlsRow{
