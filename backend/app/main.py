@@ -1,9 +1,12 @@
 import asyncio
+import sqlite3
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import FileResponse
+
+from app.db import open_database
 
 
 app = FastAPI(title="Drone Swarm Tracker API")
@@ -15,6 +18,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 VIDEO_PATH = Path(__file__).resolve().parents[1] / "data" / "perdix_swarm_demo.mp4"
+MAX_REPLAY_WINDOW_MS = 10 * 60 * 1000
+MAX_REPLAY_LIMIT = 20_000
 
 
 @app.get("/health")
@@ -29,6 +34,38 @@ async def video() -> FileResponse:
     if not VIDEO_PATH.is_file():
         raise HTTPException(status_code=404, detail="Demo video not found")
     return FileResponse(VIDEO_PATH, media_type="video/mp4")
+
+
+@app.get("/replay")
+async def replay(
+    start_ms: int = Query(ge=0),
+    end_ms: int = Query(ge=0),
+    limit: int = Query(ge=1, le=MAX_REPLAY_LIMIT),
+) -> dict[str, list[dict]]:
+    """Return persisted samples for a bounded timestamp range."""
+    if start_ms >= end_ms:
+        raise HTTPException(status_code=400, detail="start_ms must be less than end_ms")
+    if end_ms - start_ms > MAX_REPLAY_WINDOW_MS:
+        raise HTTPException(status_code=400, detail="Replay range cannot exceed 10 minutes")
+
+    connection = open_database()
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            """
+            SELECT ts_ms, track_id, bearing, range_u, heading,
+                   rel_speed_u, altitude_m, confidence
+            FROM track_samples
+            WHERE ts_ms >= ? AND ts_ms <= ?
+            ORDER BY ts_ms ASC
+            LIMIT ?
+            """,
+            (start_ms, end_ms, limit),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    return {"samples": [dict(row) for row in rows]}
 
 
 @app.websocket("/ws/tracks")

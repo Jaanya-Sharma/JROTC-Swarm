@@ -5,6 +5,27 @@ const BACKEND_WS_URL = 'ws://127.0.0.1:8000/ws/tracks'
 const BACKEND_VIDEO_URL = 'http://127.0.0.1:8000/video'
 const WS_BUFFER_SECONDS = 60
 
+function useLocalStorage(key, initialValue){
+  const [value, setValue] = useState(()=>{
+    try {
+      const stored = window.localStorage.getItem(key)
+      return stored === null ? initialValue : JSON.parse(stored)
+    } catch {
+      return initialValue
+    }
+  })
+
+  useEffect(()=>{
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value))
+    } catch {
+      // Keep the in-memory value when storage is unavailable or full.
+    }
+  }, [key, value])
+
+  return [value, setValue]
+}
+
 function clamp(n, a, b){ return Math.max(a, Math.min(b, n)) }
 function fmt(n, d=0){ return (n===null||n===undefined||Number.isNaN(n)) ? '—' : n.toFixed(d) }
 
@@ -89,7 +110,7 @@ export default function App(){
   const [speed, setSpeed] = useState(1)
   const [tick, setTick] = useState(0)
   const [selectedId, setSelectedId] = useState(7)
-  const [notesById, setNotesById] = useState({})
+  const [notesById, setNotesById] = useLocalStorage('commander-notes-by-track-id', {})
   const [search, setSearch] = useState('')
   const [alertsOnly, setAlertsOnly] = useState(false)
   const [showVectors, setShowVectors] = useState(true)
