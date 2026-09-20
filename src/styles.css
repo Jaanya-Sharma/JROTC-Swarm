@@ -96,6 +96,7 @@ a{ color:inherit; text-decoration:none; }
 .btn:active{ transform: translateY(1px); }
 .btn.primary{ background: rgba(34,197,94,.14); border-color: rgba(34,197,94,.35); }
 .btn.primary:hover{ background: rgba(34,197,94,.18); }
+.topPlaybackButton{ min-width:68px; height:47px; }
 .btn.bad{ background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.35); }
 
 .mid{
@@ -116,6 +117,14 @@ a{ color:inherit; text-decoration:none; }
   flex-direction:column;
   min-height:0;
 }
+.panelExpanded{
+  position:fixed;
+  inset:76px 12px 116px;
+  z-index:20;
+  background:#0b1426;
+  backdrop-filter:none;
+}
+.panelExpanded .panelBody{ overflow:auto !important; }
 .panelHeader{
   padding: 12px 14px;
   border-bottom: 1px solid rgba(255,255,255,.08);

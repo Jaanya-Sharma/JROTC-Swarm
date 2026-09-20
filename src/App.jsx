@@ -111,6 +111,8 @@ export default function App(){
   const [playing, setPlaying] = useState(true)
   const [speed, setSpeed] = useState(1)
   const [tick, setTick] = useState(0)
+  const [videoDuration, setVideoDuration] = useState(600)
+  const [videoLoaded, setVideoLoaded] = useState(false)
   const [selectedId, setSelectedId] = useState(7)
   const [notesById, setNotesById] = useLocalStorage('commander-notes-by-track-id', {})
   const [search, setSearch] = useState('')
@@ -122,6 +124,7 @@ export default function App(){
   const [drawZoneMode, setDrawZoneMode] = useState(false)
   const [zoneDrag, setZoneDrag] = useState(null)
   const [zones, setZones] = useState([])
+  const [expandedPanel, setExpandedPanel] = useState(null)
 
   const timerRef = useRef(null)
   const videoRef = useRef(null)
@@ -133,9 +136,17 @@ export default function App(){
 
   useEffect(()=>{
     clearInterval(timerRef.current)
-    if (!playing) return
+    if (!playing || videoLoaded) return
     timerRef.current = setInterval(()=> setTick(t=>t+1), 250 / speed)
     return ()=> clearInterval(timerRef.current)
+  }, [playing, speed, videoLoaded])
+
+  useEffect(()=>{
+    const video = videoRef.current
+    if (!video) return
+    video.playbackRate = speed
+    if (playing) video.play().catch(()=>{})
+    else video.pause()
   }, [playing, speed])
 
   useEffect(()=>{
@@ -259,10 +270,15 @@ export default function App(){
     return rows
   }, [zoneEvents, tracks, clusters, alertCount])
 
-  const rewind = ()=> setTick(v=> Math.max(0, v-12))
-  const stepBack = ()=> setTick(v=> Math.max(0, v-1))
-  const stepFwd = ()=> setTick(v=> v+1)
-  const fastFwd = ()=> setTick(v=> v+12)
+  const seekVideo = (seconds) => {
+    const video = videoRef.current
+    if (video) video.currentTime = Math.max(0, video.currentTime + seconds)
+    setTick(v=> Math.max(0, v + seconds))
+  }
+  const rewind = ()=> seekVideo(-12)
+  const stepBack = ()=> seekVideo(-1 / 30)
+  const stepFwd = ()=> seekVideo(1 / 30)
+  const fastFwd = ()=> seekVideo(12)
 
   const W=680, H=520
   const cx=W/2, cy=H/2
@@ -479,7 +495,7 @@ export default function App(){
         <div className="actions">
           <button className="btn" onClick={()=>setShowVectors(v=>!v)}>{showVectors ? 'Vectors: ON' : 'Vectors: OFF'}</button>
           <button className="btn" onClick={()=>setAlertsOnly(v=>!v)}>{alertsOnly ? 'Alerts: ON' : 'Alerts: OFF'}</button>
-          <button className="btn primary" onClick={()=>setPlaying(p=>!p)}>{playing ? 'Pause' : 'Play'}</button>
+          <button className="btn primary topPlaybackButton" onClick={()=>setPlaying(p=>!p)}>{playing ? 'Pause' : 'Play'}</button>
           <button className="btn" onClick={rewind}>⟲ Rewind</button>
           <button className="btn" onClick={fastFwd}>Fast ⟳</button>
           <button className="btn" onClick={exportAar}>Export AAR</button>
@@ -488,18 +504,21 @@ export default function App(){
 
       <div className="mid">
         {/* LEFT: Video + playback */}
-        <div className="panel">
+        <div className={`panel workspacePanel${expandedPanel === 'video' ? ' panelExpanded' : ''}`}>
           <div className="panelHeader">
             <div className="panelTitle">
               <div className="t">Video Feed</div>
               <div className="d">MP4 feed with time-synchronized detection overlay</div>
             </div>
             <div className="kpi"><span>DVIDS • Perdix demo</span></div>
+            <button className="btn" onClick={()=>setExpandedPanel(expandedPanel === 'video' ? null : 'video')}>
+              {expandedPanel === 'video' ? 'Restore' : 'Expand'}
+            </button>
           </div>
 
           <div className="panelBody">
             <div className="videoBox">
-              <video ref={videoRef} className="videoFeed" src={BACKEND_VIDEO_URL} autoPlay muted playsInline />
+              <video ref={videoRef} className="videoFeed" src={BACKEND_VIDEO_URL} autoPlay muted playsInline onLoadedMetadata={()=>{ const video = videoRef.current; video.playbackRate = speed; setVideoDuration(video.duration || 600); setVideoLoaded(true) }} onTimeUpdate={(event)=>setTick(event.currentTarget.currentTime)} />
               <canvas ref={overlayCanvasRef} className="videoOverlay" aria-label="Detection overlay" />
               <div className="hud">
                 <div className="tag tagTL"><b>HUD</b> • IDs • Conf • Flags</div>
@@ -526,14 +545,14 @@ export default function App(){
             </div>
 
             <div style={{ marginTop: 10 }}>
-              <input className="range" type="range" min="0" max="600" value={tick} onChange={(e)=>setTick(Number(e.target.value))} />
+              <input className="range" type="range" min="0" max={videoDuration} step="0.1" value={Math.min(tick, videoDuration)} onChange={(e)=>{ const time = Number(e.target.value); if (videoRef.current) videoRef.current.currentTime = time; setTick(time) }} />
               <div className="small">Timeline scrub • deterministic simulation</div>
             </div>
           </div>
         </div>
 
         {/* CENTER: Radar */}
-        <div className="panel">
+        <div className={`panel workspacePanel${expandedPanel === 'radar' ? ' panelExpanded' : ''}`}>
           <div className="panelHeader radarPanelHeader">
             <div className="panelTitle">
               <div className="t">Radar / Tactical Picture</div>
@@ -545,6 +564,9 @@ export default function App(){
               <span>Selected: {selected ? selected.callsign : '—'}</span>
               <button className={`btn${drawZoneMode ? ' primary' : ''}`} onClick={()=>setDrawZoneMode(enabled=>!enabled)}>
                 {drawZoneMode ? 'Drawing zone…' : 'Draw zone'}
+              </button>
+              <button className="btn" onClick={()=>setExpandedPanel(expandedPanel === 'radar' ? null : 'radar')}>
+                {expandedPanel === 'radar' ? 'Restore' : 'Expand'}
               </button>
             </div>
           </div>
@@ -646,13 +668,16 @@ export default function App(){
         </div>
 
         {/* RIGHT: Inspector + table */}
-        <div className="panel">
+        <div className={`panel workspacePanel${expandedPanel === 'inspector' ? ' panelExpanded' : ''}`}>
           <div className="panelHeader">
             <div className="panelTitle">
               <div className="t">Track Inspector</div>
               <div className="d">Commander-ready detail + notes per track</div>
             </div>
             <div className="kpi"><span>Integrity: ON</span></div>
+            <button className="btn" onClick={()=>setExpandedPanel(expandedPanel === 'inspector' ? null : 'inspector')}>
+              {expandedPanel === 'inspector' ? 'Restore' : 'Expand'}
+            </button>
           </div>
 
           <div className="panelBody">
