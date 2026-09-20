@@ -2,6 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 const BACKEND_WS_URL = 'ws://127.0.0.1:8000/ws/tracks'
+const BACKEND_VIDEO_URL = 'http://127.0.0.1:8000/video'
+const WS_BUFFER_SECONDS = 60
 
 function clamp(n, a, b){ return Math.max(a, Math.min(b, n)) }
 function fmt(n, d=0){ return (n===null||n===undefined||Number.isNaN(n)) ? '—' : n.toFixed(d) }
@@ -10,6 +12,14 @@ function polarToXY(cx, cy, radius, bearingDeg, rangeU){
   const a = (bearingDeg - 90) * Math.PI / 180
   const rr = radius * rangeU
   return { x: cx + rr*Math.cos(a), y: cy + rr*Math.sin(a) }
+}
+
+function closestFrameForTime(frames, mediaTime){
+  return frames.reduce((closest, frame) =>
+    Math.abs(frame.media_t_sec - mediaTime) < Math.abs(closest.media_t_sec - mediaTime)
+      ? frame
+      : closest
+  )
 }
 
 function makeTrack(id, t){
@@ -84,9 +94,14 @@ export default function App(){
   const [alertsOnly, setAlertsOnly] = useState(false)
   const [showVectors, setShowVectors] = useState(true)
   const [rings, setRings] = useState(5)
-  const [wsTracks, setWsTracks] = useState(null)
+  const [syncedTracks, setSyncedTracks] = useState(null)
 
   const timerRef = useRef(null)
+  const videoRef = useRef(null)
+  const overlayCanvasRef = useRef(null)
+  const wsFrameBufferRef = useRef([])
+  const frameSizeRef = useRef({ width: 0, height: 0 })
+  const syncedFrameRef = useRef(null)
 
   useEffect(()=>{
     clearInterval(timerRef.current)
@@ -100,22 +115,86 @@ export default function App(){
 
     socket.onmessage = (event) => {
       const message = JSON.parse(event.data)
-      if (message.type === 'tracks_snapshot' && Array.isArray(message.tracks)){
-        setWsTracks(message.tracks)
+      if (Number.isFinite(message.frame_w) && Number.isFinite(message.frame_h)){
+        frameSizeRef.current = { width: message.frame_w, height: message.frame_h }
+      }
+      if (Number.isFinite(message.media_t_sec) && (Array.isArray(message.bboxes) || Array.isArray(message.tracks))){
+        const frames = wsFrameBufferRef.current
+        frames.push(message)
+        const cutoff = message.media_t_sec - WS_BUFFER_SECONDS
+        while (frames.length && frames[0].media_t_sec < cutoff) frames.shift()
       }
     }
 
     return () => socket.close()
   }, [])
 
+  useEffect(()=>{
+    let animationFrameId
+
+    const drawOverlay = () => {
+      const video = videoRef.current
+      const canvas = overlayCanvasRef.current
+      if (!video || !canvas) return
+
+      const width = video.clientWidth
+      const height = video.clientHeight
+      const pixelRatio = window.devicePixelRatio || 1
+      if (canvas.width !== Math.round(width * pixelRatio) || canvas.height !== Math.round(height * pixelRatio)){
+        canvas.width = Math.round(width * pixelRatio)
+        canvas.height = Math.round(height * pixelRatio)
+      }
+
+      const context = canvas.getContext('2d')
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+      context.clearRect(0, 0, width, height)
+
+      const frames = wsFrameBufferRef.current
+      if (frames.length){
+        const closestFrame = closestFrameForTime(frames, video.currentTime)
+        if (closestFrame !== syncedFrameRef.current){
+          syncedFrameRef.current = closestFrame
+          setSyncedTracks(Array.isArray(closestFrame.tracks) ? closestFrame.tracks : null)
+        }
+        const sourceWidth = closestFrame.frame_w || frameSizeRef.current.width || video.videoWidth
+        const sourceHeight = closestFrame.frame_h || frameSizeRef.current.height || video.videoHeight
+
+        if (sourceWidth && sourceHeight){
+          context.strokeStyle = '#22c55e'
+          context.fillStyle = '#22c55e'
+          context.lineWidth = 2
+          context.font = '12px ui-monospace, monospace'
+          for (const bbox of closestFrame.bboxes || []){
+            const [x1, y1, x2, y2, confidence] = Array.isArray(bbox)
+              ? bbox
+              : [bbox.x1, bbox.y1, bbox.x2, bbox.y2, bbox.confidence]
+            if (![x1, y1, x2, y2].every(Number.isFinite)) continue
+
+            const x = x1 * width / sourceWidth
+            const y = y1 * height / sourceHeight
+            const boxWidth = (x2 - x1) * width / sourceWidth
+            const boxHeight = (y2 - y1) * height / sourceHeight
+            context.strokeRect(x, y, boxWidth, boxHeight)
+            if (Number.isFinite(confidence)) context.fillText(confidence.toFixed(2), x, Math.max(12, y - 4))
+          }
+        }
+      }
+
+      animationFrameId = requestAnimationFrame(drawOverlay)
+    }
+
+    animationFrameId = requestAnimationFrame(drawOverlay)
+    return () => cancelAnimationFrame(animationFrameId)
+  }, [])
+
   const t = Date.now() + tick*120
   const tracks = useMemo(()=>{
-    if (wsTracks !== null) return wsTracks
+    if (syncedTracks !== null) return syncedTracks
 
     const list = []
     for (let i=1;i<=72;i++) list.push(makeTrack(i, t))
     return list
-  }, [t, wsTracks])
+  }, [t, syncedTracks])
 
   const clusters = useMemo(()=>groupClusters(tracks), [tracks])
   const selected = useMemo(()=> tracks.find(x=>x.id===selectedId) || null, [tracks, selectedId])
@@ -210,14 +289,15 @@ export default function App(){
           <div className="panelHeader">
             <div className="panelTitle">
               <div className="t">Video Feed</div>
-              <div className="d">Replace placeholder with MP4/HLS + overlay canvas</div>
+              <div className="d">MP4 feed with time-synchronized detection overlay</div>
             </div>
             <div className="kpi"><span>DVIDS • Perdix demo</span></div>
           </div>
 
           <div className="panelBody">
             <div className="videoBox">
-              <div className="gridNoise" />
+              <video ref={videoRef} className="videoFeed" src={BACKEND_VIDEO_URL} autoPlay muted playsInline />
+              <canvas ref={overlayCanvasRef} className="videoOverlay" aria-label="Detection overlay" />
               <div className="hud">
                 <div className="tag tagTL"><b>HUD</b> • IDs • Conf • Flags</div>
                 <div className="tag tagTR"><b>INTEGRITY</b> • no false precision</div>

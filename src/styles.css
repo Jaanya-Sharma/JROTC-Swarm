@@ -143,7 +143,6 @@ a{ color:inherit; text-decoration:none; }
   overflow:auto;
 }
 
-/* Video placeholder */
 .videoBox{
   border-radius: 18px;
   border:1px solid rgba(255,255,255,.10);
@@ -154,6 +153,20 @@ a{ color:inherit; text-decoration:none; }
   aspect-ratio: 16/9;
   position:relative;
   overflow:hidden;
+}
+.videoFeed{
+  width:100%;
+  height:100%;
+  display:block;
+  object-fit:contain;
+  background:#000;
+}
+.videoOverlay{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  pointer-events:none;
 }
 .gridNoise{
   position:absolute; inset:0;
