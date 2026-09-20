@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import sqlite3
 import time
 from itertools import count
@@ -7,8 +8,9 @@ from math import cos, pi, sin
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import FileResponse, JSONResponse
 
 from app.auth import auth_required, create_access_token, credentials_are_valid, require_http_auth, require_websocket_auth
@@ -23,8 +25,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Range"],
+    expose_headers=["Accept-Ranges", "Content-Length", "Content-Range"],
 )
 
 
@@ -34,6 +37,15 @@ async def rate_limit(request: Request, call_next):
     if not RATE_LIMITER.allow(client_ip):
         return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
     return await call_next(request)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error(_: Request, error: RequestValidationError) -> JSONResponse:
+    """Return one safe 400 response for invalid query, path, and JSON inputs."""
+    messages = [item["msg"] for item in error.errors()]
+    return JSONResponse(status_code=400, content={"detail": messages})
+
+
 VIDEO_PATH = Path(__file__).resolve().parents[1] / "data" / "perdix_swarm_demo.mp4"
 MAX_REPLAY_WINDOW_MS = 10 * 60 * 1000
 MAX_REPLAY_LIMIT = 20_000
@@ -48,6 +60,8 @@ AUTH_RATE_LIMITER = PerIpRateLimiter(5, 60)
 
 
 class ZoneRect(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     x1: float = Field(ge=0, le=1)
     y1: float = Field(ge=0, le=1)
     x2: float = Field(ge=0, le=1)
@@ -61,6 +75,8 @@ class ZoneRect(BaseModel):
 
 
 class ZoneCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=128)
     rect: ZoneRect
 
@@ -74,8 +90,10 @@ class ZoneCreate(BaseModel):
 
 
 class TokenRequest(BaseModel):
-    username: str
-    password: str
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=1024)
 
 
 def engine_zones() -> list[dict]:
@@ -120,11 +138,30 @@ async def token(credentials: TokenRequest, request: Request) -> dict[str, str]:
     return {"access_token": create_access_token(credentials.username), "token_type": "bearer"}
 
 
+def validate_range_header(value: str | None, file_size: int) -> None:
+    """Reject malformed or unsatisfiable single-byte ranges before FileResponse."""
+    if value is None:
+        return
+    if len(value) > 256:
+        raise HTTPException(status_code=400, detail="Range header is too long")
+    match = re.fullmatch(r"bytes=(\d*)-(\d*)", value.strip())
+    if match is None or not any(match.groups()):
+        raise HTTPException(status_code=400, detail="Invalid Range header")
+    start_text, end_text = match.groups()
+    if start_text:
+        start = int(start_text)
+        if start >= file_size or (end_text and int(end_text) < start):
+            raise HTTPException(status_code=400, detail="Range is outside the video")
+    elif int(end_text) <= 0:
+        raise HTTPException(status_code=400, detail="Range is outside the video")
+
+
 @app.get("/video")
-async def video(_: str | None = Depends(require_http_auth)) -> FileResponse:
+async def video(request: Request, _: str | None = Depends(require_http_auth)) -> FileResponse:
     """Serve the demo video; FileResponse handles HTTP byte-range requests."""
     if not VIDEO_PATH.is_file():
         raise HTTPException(status_code=404, detail="Demo video not found")
+    validate_range_header(request.headers.get("range"), VIDEO_PATH.stat().st_size)
     return FileResponse(VIDEO_PATH, media_type="video/mp4")
 
 
@@ -195,6 +232,12 @@ async def tracks_websocket(websocket: WebSocket) -> None:
     if not RATE_LIMITER.allow(client_ip):
         await websocket.close(code=1013)
         return
+    access_token = websocket.query_params.get("access_token")
+    if access_token is not None and len(access_token) > 4096:
+        # A WebSocket cannot return an HTTP response after upgrade; 1008 is the
+        # protocol equivalent for rejected client input.
+        await websocket.close(code=1008, reason="access_token is too long")
+        return
     if auth_required() and await require_websocket_auth(websocket) is None:
         return
     await websocket.accept()
@@ -232,6 +275,9 @@ async def tracks_websocket(websocket: WebSocket) -> None:
             await asyncio.sleep(1 / pipeline.fps)
     except WebSocketDisconnect:
         pass
+    except Exception:
+        # Do not expose internal processing errors to a connected client.
+        await websocket.close(code=1011, reason="Internal server error")
     finally:
         writer.flush()
         connection.close()

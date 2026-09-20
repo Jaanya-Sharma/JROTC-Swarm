@@ -69,6 +69,8 @@ def _bearer_token(authorization: str | None) -> str | None:
 def _decode_token(token: str | None) -> str:
     if not token:
         raise HTTPException(status_code=401, detail="Bearer token required")
+    if len(token) > 4096:
+        raise HTTPException(status_code=400, detail="Bearer token is too long")
     try:
         payload = jwt.decode(token, _secret(), algorithms=["HS256"])
         subject = payload.get("sub")

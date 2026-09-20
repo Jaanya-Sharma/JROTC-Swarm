@@ -1,5 +1,5 @@
-fastapi
-opencv-python
-PyJWT
-ultralytics
-uvicorn[standard]
+fastapi==0.141.1
+opencv-python==5.0.0.93
+PyJWT==2.14.0
+ultralytics==8.4.157
+uvicorn[standard]==0.53.0
