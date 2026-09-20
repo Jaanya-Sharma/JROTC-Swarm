@@ -1,5 +1,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { jsPDF } from 'jspdf'
 
 const BACKEND_WS_URL = 'ws://127.0.0.1:8000/ws/tracks'
 const BACKEND_VIDEO_URL = 'http://127.0.0.1:8000/video'
@@ -117,6 +118,7 @@ export default function App(){
   const [showVectors, setShowVectors] = useState(true)
   const [rings, setRings] = useState(5)
   const [syncedTracks, setSyncedTracks] = useState(null)
+  const [zoneEvents, setZoneEvents] = useState([])
   const [drawZoneMode, setDrawZoneMode] = useState(false)
   const [zoneDrag, setZoneDrag] = useState(null)
   const [zones, setZones] = useState([])
@@ -149,6 +151,9 @@ export default function App(){
         frames.push(message)
         const cutoff = message.media_t_sec - WS_BUFFER_SECONDS
         while (frames.length && frames[0].media_t_sec < cutoff) frames.shift()
+      }
+      if (message.type === 'events' && Array.isArray(message.events)){
+        setZoneEvents(currentEvents => [...message.events, ...currentEvents].slice(0, 100))
       }
     }
 
@@ -240,8 +245,10 @@ export default function App(){
   }, [tracks, search, alertsOnly])
 
   const logRows = useMemo(()=>{
-    // generate a few recent events from current state (prototype)
-    const rows = []
+    const rows = zoneEvents.map(event => ({
+      ts: new Date(event.ts_ms).toISOString().slice(11,19),
+      msg: `Zone ${event.type.toUpperCase()}: Track ${event.track_id} • ${event.zone_name || event.zone_id}`,
+    }))
     rows.push({ ts: nowTS(), msg: `AI stream active • ${tracks.length} tracks • ${alertCount} flagged` })
     if (clusters[0]) rows.push({ ts: nowTS(), msg: `Cohesion: Cluster 1 ~ ${clusters[0].n} tracks` })
     const lost = tracks.filter(x=>x.flags.includes('LOST')).length
@@ -250,7 +257,7 @@ export default function App(){
     if (occ) rows.push({ ts: nowTS(), msg: `Info: ${occ} track(s) OCCLUDED (line-of-sight / clutter)` })
     rows.push({ ts: nowTS(), msg: `Mode: Relative range units + inferred altitude bands (no telemetry)` })
     return rows
-  }, [tracks, clusters, alertCount])
+  }, [zoneEvents, tracks, clusters, alertCount])
 
   const rewind = ()=> setTick(v=> Math.max(0, v-12))
   const stepBack = ()=> setTick(v=> Math.max(0, v-1))
@@ -345,23 +352,89 @@ export default function App(){
         replayResponse.json(),
         eventsResponse.json(),
       ])
-      const aar = {
-        generated_at: new Date(endMs).toISOString(),
-        start_ms: startMs,
-        end_ms: endMs,
-        track_samples: replay.samples,
-        events: events.events,
-      }
-      const downloadUrl = URL.createObjectURL(
-        new Blob([JSON.stringify(aar, null, 2)], { type: 'application/json' })
-      )
-      const link = document.createElement('a')
-      link.href = downloadUrl
-      link.download = `aar-${endMs}.json`
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(downloadUrl)
+      const eventList = events.events || []
+      const pdf = new jsPDF({ unit: 'pt', format: 'letter' })
+      const pageWidth = pdf.internal.pageSize.getWidth()
+      const margin = 42
+      const timeline = { x: margin, y: 132, width: pageWidth - margin * 2, height: 110 }
+      const zoneMap = { x: margin, y: 302, width: 250, height: 180 }
+
+      pdf.setFillColor(10, 18, 30)
+      pdf.rect(0, 0, pageWidth, 76, 'F')
+      pdf.setTextColor(230, 242, 255)
+      pdf.setFontSize(20)
+      pdf.text('After-Action Report', margin, 36)
+      pdf.setFontSize(10)
+      pdf.text(`Generated ${new Date(endMs).toISOString()}`, margin, 56)
+
+      pdf.setTextColor(30, 41, 59)
+      pdf.setFontSize(11)
+      pdf.text(`Window: ${new Date(startMs).toLocaleTimeString()} to ${new Date(endMs).toLocaleTimeString()}`, margin, 100)
+      pdf.text(`Track samples: ${replay.samples?.length || 0}   Zone events: ${eventList.length}   Zones: ${zones.length}`, margin, 117)
+
+      pdf.setFontSize(12)
+      pdf.text('Event timeline', timeline.x, timeline.y - 10)
+      pdf.setDrawColor(148, 163, 184)
+      pdf.rect(timeline.x, timeline.y, timeline.width, timeline.height)
+      pdf.setFontSize(9)
+      pdf.setTextColor(71, 85, 105)
+      pdf.text(new Date(startMs).toLocaleTimeString(), timeline.x, timeline.y + timeline.height + 14)
+      pdf.text(new Date(endMs).toLocaleTimeString(), timeline.x + timeline.width - 54, timeline.y + timeline.height + 14)
+
+      const eventColors = { enter: [34, 197, 94], exit: [239, 68, 68], dwell: [245, 158, 11] }
+      eventList.forEach((event, index) => {
+        const ratio = clamp((event.ts_ms - startMs) / (endMs - startMs), 0, 1)
+        const x = timeline.x + ratio * timeline.width
+        const color = eventColors[event.type] || [56, 189, 248]
+        pdf.setDrawColor(...color)
+        pdf.setFillColor(...color)
+        pdf.line(x, timeline.y + 14, x, timeline.y + timeline.height - 14)
+        pdf.circle(x, timeline.y + 24 + (index % 3) * 22, 3, 'F')
+      })
+      pdf.setFontSize(9)
+      ;[['ENTER', eventColors.enter], ['EXIT', eventColors.exit], ['DWELL', eventColors.dwell]].forEach(([label, color], index) => {
+        const x = timeline.x + index * 76
+        pdf.setFillColor(...color)
+        pdf.circle(x, timeline.y + timeline.height - 8, 3, 'F')
+        pdf.setTextColor(71, 85, 105)
+        pdf.text(label, x + 7, timeline.y + timeline.height - 5)
+      })
+
+      pdf.setTextColor(30, 41, 59)
+      pdf.setFontSize(12)
+      pdf.text('Zone map', zoneMap.x, zoneMap.y - 10)
+      pdf.setFillColor(241, 245, 249)
+      pdf.rect(zoneMap.x, zoneMap.y, zoneMap.width, zoneMap.height, 'F')
+      pdf.setDrawColor(148, 163, 184)
+      pdf.rect(zoneMap.x, zoneMap.y, zoneMap.width, zoneMap.height)
+      zones.forEach(zone => {
+        const x = zoneMap.x + zone.rect.x1 * zoneMap.width
+        const y = zoneMap.y + zone.rect.y1 * zoneMap.height
+        const width = (zone.rect.x2 - zone.rect.x1) * zoneMap.width
+        const height = (zone.rect.y2 - zone.rect.y1) * zoneMap.height
+        pdf.setFillColor(56, 189, 248)
+        pdf.setDrawColor(14, 116, 144)
+        pdf.setGState(new pdf.GState({ opacity: 0.25 }))
+        pdf.rect(x, y, width, height, 'FD')
+        pdf.setGState(new pdf.GState({ opacity: 1 }))
+        pdf.setTextColor(8, 47, 73)
+        pdf.setFontSize(8)
+        pdf.text(zone.name, x + 4, y + 12, { maxWidth: Math.max(10, width - 8) })
+      })
+
+      const eventListX = zoneMap.x + zoneMap.width + 34
+      pdf.setTextColor(30, 41, 59)
+      pdf.setFontSize(12)
+      pdf.text('Recent events', eventListX, zoneMap.y - 10)
+      pdf.setFontSize(9)
+      eventList.slice(-12).reverse().forEach((event, index) => {
+        const y = zoneMap.y + 16 + index * 13
+        const text = `${new Date(event.ts_ms).toLocaleTimeString()}  ${event.type.toUpperCase()}  T${event.track_id}  ${event.zone_name || event.zone_id}`
+        pdf.text(text, eventListX, y, { maxWidth: pageWidth - eventListX - margin })
+      })
+      if (!eventList.length) pdf.text('No events recorded in this window.', eventListX, zoneMap.y + 16)
+
+      pdf.save(`aar-${endMs}.pdf`)
     } catch {
       window.alert('Could not export the AAR.')
     }

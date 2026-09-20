@@ -1,6 +1,8 @@
 import asyncio
 import sqlite3
+import time
 from itertools import count
+from math import cos, pi, sin
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -9,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.responses import FileResponse
 
 from app.db import open_database
+from app.zones import ZoneEventEngine
 
 
 app = FastAPI(title="Drone Swarm Tracker API")
@@ -25,6 +28,9 @@ MAX_REPLAY_LIMIT = 20_000
 ZONE_IDS = count(1)
 ZONES: list[dict] = []
 EVENTS: list[dict] = []
+RADAR_WIDTH = 680
+RADAR_HEIGHT = 520
+RADAR_RADIUS = min(RADAR_WIDTH, RADAR_HEIGHT) / 2 - 28
 
 
 class ZoneRect(BaseModel):
@@ -51,6 +57,30 @@ class ZoneCreate(BaseModel):
         if not cleaned:
             raise ValueError("Zone name cannot be empty")
         return cleaned
+
+
+def engine_zones() -> list[dict]:
+    """Convert API rectangle objects to the tuple form used by the engine."""
+    return [
+        {
+            "id": zone["id"],
+            "rect": (
+                zone["rect"]["x1"],
+                zone["rect"]["y1"],
+                zone["rect"]["x2"],
+                zone["rect"]["y2"],
+            ),
+        }
+        for zone in ZONES
+    ]
+
+
+def track_radar_position(track: dict) -> tuple[float, float]:
+    """Convert a radar bearing/range track to the SVG's normalized coordinates."""
+    angle = (track["bearing"] - 90) * pi / 180
+    x = RADAR_WIDTH / 2 + RADAR_RADIUS * track["range_u"] * cos(angle)
+    y = RADAR_HEIGHT / 2 + RADAR_RADIUS * track["range_u"] * sin(angle)
+    return x / RADAR_WIDTH, y / RADAR_HEIGHT
 
 
 @app.get("/health")
@@ -130,6 +160,7 @@ async def tracks_websocket(websocket: WebSocket) -> None:
     """Stream a synthetic track snapshot at 10 Hz."""
     await websocket.accept()
     bearing = 0.0
+    zone_engine = ZoneEventEngine([])
 
     try:
         while True:
@@ -146,6 +177,19 @@ async def tracks_websocket(websocket: WebSocket) -> None:
                 "flags": [],
             }
             await websocket.send_json({"type": "tracks_snapshot", "tracks": [track]})
+            zone_engine.zones = engine_zones()
+            x, y = track_radar_position(track)
+            events = zone_engine.process(
+                [{"id": track["id"], "x": x, "y": y, "ts_ms": int(time.time() * 1000)}]
+            )
+            if events:
+                zone_names = {zone["id"]: zone["name"] for zone in ZONES}
+                for event in events:
+                    event["zone_name"] = zone_names.get(event["zone_id"], "Unknown zone")
+                EVENTS.extend(events)
+                if len(EVENTS) > 10_000:
+                    del EVENTS[:-10_000]
+                await websocket.send_json({"type": "events", "events": events})
             bearing = (bearing + 3) % 360
             await asyncio.sleep(0.1)
     except WebSocketDisconnect:
