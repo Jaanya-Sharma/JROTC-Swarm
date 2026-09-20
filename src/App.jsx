@@ -534,7 +534,7 @@ export default function App(){
 
         {/* CENTER: Radar */}
         <div className="panel">
-          <div className="panelHeader">
+          <div className="panelHeader radarPanelHeader">
             <div className="panelTitle">
               <div className="t">Radar / Tactical Picture</div>
               <div className="d">Bearing + relative range • vectors optional • click a track for details</div>
@@ -543,6 +543,9 @@ export default function App(){
               <span>Rings: {rings}</span>
               <span>Clusters: {clusters.length}</span>
               <span>Selected: {selected ? selected.callsign : '—'}</span>
+              <button className={`btn${drawZoneMode ? ' primary' : ''}`} onClick={()=>setDrawZoneMode(enabled=>!enabled)}>
+                {drawZoneMode ? 'Drawing zone…' : 'Draw zone'}
+              </button>
             </div>
           </div>
 
@@ -634,9 +637,6 @@ export default function App(){
               <div style={{ display:'flex', gap:10, marginTop:10, width:'100%', alignItems:'center', justifyContent:'space-between' }}>
                 <div className="small">Display</div>
                 <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-                  <button className={`btn${drawZoneMode ? ' primary' : ''}`} onClick={()=>setDrawZoneMode(enabled=>!enabled)}>
-                    {drawZoneMode ? 'Drawing zone…' : 'Draw zone'}
-                  </button>
                   <button className="btn" onClick={()=>setRings(r=>clamp(r-1,3,7))}>- Ring</button>
                   <button className="btn" onClick={()=>setRings(r=>clamp(r+1,3,7))}>+ Ring</button>
                 </div>

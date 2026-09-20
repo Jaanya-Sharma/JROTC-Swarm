@@ -136,6 +136,12 @@ a{ color:inherit; text-decoration:none; }
   color: rgba(159,178,209,.95);
 }
 .kpi span{ font-family:var(--mono); padding:4px 8px; border-radius:999px; border:1px solid rgba(255,255,255,.10); background: rgba(0,0,0,.18); }
+.radarPanelHeader{
+  align-items:flex-start;
+  flex-direction:column;
+  gap:8px;
+}
+.radarPanelHeader .kpi{ flex-wrap:wrap; }
 
 .panelBody{
   padding: 12px;
