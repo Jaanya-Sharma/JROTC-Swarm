@@ -856,23 +856,24 @@ export default function App(){
                     <div className="cardMini"><div className="k">Confidence</div><div className="v">{fmt(selected.confidence,2)}</div></div>
                   </div>
 
-                  <div className="notes">
-                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                      <div style={{ fontSize:12, fontWeight:700 }}>Commander Notes</div>
-                      <div className="small">Saved locally (prototype)</div>
-                    </div>
-                    <div style={{ marginTop: 8 }}>
-                      <textarea
-                        value={notesById[selected.id] || ''}
-                        onChange={(e)=> setNotesById(n => ({...n, [selected.id]: e.target.value}))}
-                        placeholder="Observations, anomalies, cluster notes, confidence issues, cadet tasking…"
-                      />
-                    </div>
-                  </div>
                 </>
               ) : (
-                <div className="small">Select a track on the radar or table.</div>
+                <div className="small">UAV-{String(selectedId).padStart(2, '0')} is not in the current frame. Its notes remain available below.</div>
               )}
+
+              <div className="notes">
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <div style={{ fontSize:12, fontWeight:700 }}>Commander Notes</div>
+                  <div className="small">UAV-{String(selectedId).padStart(2, '0')} • saved locally</div>
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <textarea
+                    value={notesById[selectedId] || ''}
+                    onChange={(e)=> setNotesById(n => ({...n, [selectedId]: e.target.value}))}
+                    placeholder="Observations, anomalies, cluster notes, confidence issues, cadet tasking…"
+                  />
+                </div>
+              </div>
             </div>
 
             <div style={{ marginTop: 12, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
