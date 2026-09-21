@@ -22,6 +22,19 @@ for its security assumptions and remaining risks, and
 | Week 24 — zones and AAR | SVG draw-zone control, rectangle containment, enter/exit/dwell event engine, WebSocket event messages and event log, and client-side AAR PDF export with a timeline and zone map. |
 | Secure-coding final pass | JWT support, per-IP rate limiting, strict request validation, parameterized SQL, CORS allowlist, pinned direct dependencies, ignored `.env`, and this threat model. |
 
+## Project updates
+
+- Dynamic AI Live/Offline status indicator.
+- Video play/pause controls and a seek slider synchronized with the source video.
+- Draw Zone button added to the Radar panel.
+- Expandable Video, Radar, and Track panels.
+- Python and npm dependencies upgraded to address known vulnerabilities.
+
+### Stretch goals
+
+- Rich After-Action Report (AAR) export with full PDF reporting support.
+- JWT authentication and per-IP rate limiting for the API.
+
 ## Prerequisites
 
 - Node.js 20.19+ (required by the installed Vite version)
